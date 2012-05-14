@@ -180,9 +180,10 @@ class Character:
 
         # account for innate dmg reduction of melee classes
         if className.upper() in ['MONK', 'BARBARIAN', 'BARB']:
-            self.dmg_red    = float(30.00)
+            self.base_dmg_red    = float(30.00)
         else:
-            self.dmg_red    = float(0.00)
+            self.base_dmg_red    = float(0.00)
+        self.dmg_red        = self.base_dmg_red
 
         # accumulated values from all relevant items
         self.calcCharStats()
@@ -237,6 +238,7 @@ class Character:
 
         # adjust armor based on strength (1 str == 1 armor)
         self.armor += self.str
+        self.calcDmgMitigation()
 
         # adjust resistances (1 int == 0.1 resistance to all)
         self.physical_resist    += (self.int / 10.00)
@@ -245,6 +247,7 @@ class Character:
         self.poison_resist      += (self.int / 10.00)
         self.cold_resist        += (self.int / 10.00)
         self.arcane_resist      += (self.int / 10.00)
+        self.calcResistDmgMitigation()
 
     def setMainAttr(self):
         if self.class_name.upper() in ['BARBARIAN', 'BARB']:
@@ -331,6 +334,34 @@ class Character:
         else:
             effectiveWeaponDPS = (self.mainhand.calcAvgDmg() + self.avgBonusItemDmg())*self.mainhand.aps
         return effectiveWeaponDPS * self.staticDmgAdjustmentsForDPS()
+
+    def calcDmgMitigation(self, level=0):
+        if not level: level = self.level
+        # Adjust character dmg reduction based on monster level using formula
+        # Dmg_Red = Armor / (50*enemy_level + Armor)
+        # Then add in base armor mitigation of melee classes and ensure we don't get more than 75%
+        armor_dmg_red = (self.armor/(50.00*level + self.armor))*100.00
+        self.dmg_red = min(self.base_dmg_red + armor_dmg_red, 75.00)
+
+    def calcResistDmgMitigation(self, level=0):
+        if not level: level = self.level
+        # Adjust character dmg reduction based on monster level using formula
+        # Elemental_Dmg_Red = Resist / (5*enemy_level + Resist)
+        # Then add in base armor mitigation of melee classes and ensure we don't get more than 75%
+        elemental_dmg_resist = (self.lightning_resist/(5.00*level + self.lightning_resist))*100.00
+        self.lightning_resist = min(self.lightning_resist + elemental_dmg_resist, 75.00)
+        
+        elemental_dmg_resist = (self.fire_resist/(5.00*level + self.fire_resist))*100.00
+        self.fire_resist = min(self.fire_resist + elemental_dmg_resist, 75.00)
+        
+        elemental_dmg_resist = (self.poison_resist/(5.00*level + self.poison_resist))*100.00
+        self.poison_resist = min(self.poison_resist + elemental_dmg_resist, 75.00)
+        
+        elemental_dmg_resist = (self.cold_resist/(5.00*level + self.cold_resist))*100.00
+        self.cold_resist = min(self.cold_resist + elemental_dmg_resist, 75.00)
+        
+        elemental_dmg_resist = (self.arcane_resist/(5.00*level + self.arcane_resist))*100.00
+        self.arcane_resist = min(self.arcane_resist + elemental_dmg_resist, 75.00)
 
     def calcMinNonCrit(self, weapon):
         low_dmg = 2.00
@@ -614,13 +645,21 @@ class SimulEnvironment:
             self.doAttack(printEachHit, printEachTimestamp, useAvgWeaponDmg)
             self.time += time_inc
 
-    def simulateFightEnemy(self, enemy, time_inc=0.01, printEachHit=False, printEachTimestamp=False):
+    def simulateFightEnemy(self, character, enemy, time_inc=0.01, printEachHit=False, printEachTimestamp=False):
         self.time           = 0.00
         self.time_next_swing= 0.00
         self.total_swings   = 0.00
         self.total_dmg      = 0.00
         self.dot_dmg        = 0.00
         self.num_crits      = 0.00
+
+        # Update Dmg mitigation due to monster level
+        character.calcDmgMitigation(enemy.level)
+        print 'Based on Enemy Level - Dmg Mitigation is Now: %.2f%%\n' % character.dmg_red
+
+        # Update elemental resistances due to monster level
+        character.calcResistDmgMitigation(enemy.level)
+        
         while enemy.hp > float(0.00):
             self.attackEnemy(enemy, printEachHit, printEachTimestamp)
             self.time += time_inc
@@ -640,14 +679,15 @@ if __name__ == '__main__':
 
     # Lets equip our character
     # parameters are:
-    #             type, name, lowDmg=0, highDmg=0, plusArmor=0, plusAPS=0,\
-    #             plusStr=0, plusDex=0, plusInt=0, plusVit=0, \
-    #             plusCritRate=0, plusCritDmg=0):
+    #       type, name, plusMinDmg, plusMaxDmg, plusArmor, \
+    #       plusAPS, plusStr, plusDex, plusInt, plusVit, \
+    #       plusCritRate, plusCritDmg, plusMoreDmg, plusReflectDmg, \
+    #       plusBonusArmor, plusDmgRedRng, plusDmgRedMelee):
     ring1 = Item('ring', 'Keen Ring of Wounding', 2, 4, plusAPS=5.00)
     char.addItem(ring1)
     char.addItem(ring1)
 
-    rare_helm = Item('head', 'Banished Helmet', plusStr=50, plusVit=10, plusCritRate=2.5)
+    rare_helm = Item('head', 'Banished Helmet', plusArmor=254, plusStr=50, plusVit=10, plusCritRate=2.5)
     char.addItem(rare_helm)
 
     # Lets arm our character
@@ -656,14 +696,14 @@ if __name__ == '__main__':
     w1 = Weapon('2H', 'Warmonger', 444, 659, 1.31)
     char.addWeapon(w1)
 
-    # print info about our character
+    # print info about our character 
     print char.printCharStats()
     print char.printWeaponInfo()
     print char.printWeaponDmg()
 
     env = SimulEnvironment(char)
-    enemy = Enemy(name='Temp', level=60, health=200000)
-    env.simulateFightEnemy(enemy, 0.01, True)
+    enemy = Enemy(name='Temp', level=61, health=200000)
+    env.simulateFightEnemy(char, enemy, 0.01, False)
     print '\n FINAL SUMMARY'
     env.printSimulResults()
 
@@ -679,7 +719,7 @@ if __name__ == '__main__':
 
     env = SimulEnvironment(char)
     enemy = Enemy(name='Temp', level=60, health=400000)
-    env.simulateFightEnemy(enemy, 0.01, True)
+    env.simulateFightEnemy(char, enemy, 0.01, True)
     print '\n FINAL SUMMARY'
     env.printSimulResults()
     '''
